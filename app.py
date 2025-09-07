@@ -1,156 +1,43 @@
+# app.py
 import os
-import tempfile
 import streamlit as st
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
-from langchain.chains import ConversationalRetrievalChain
-from langchain.prompts import PromptTemplate
+from ingestion import ingest_pdf
+from retriever import load_retriever
 
-
-# ---------------- PDF ingestion ---------------- #
-@st.cache_resource(show_spinner=False)
-def ingest_pdf(pdf_file, index_path):
-    """Load PDF → Chunk → Embed → Store in FAISS"""
-    # Save uploaded file temporarily
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-        tmp_file.write(pdf_file.getvalue())
-        tmp_path = tmp_file.name
-    
-    loader = PyPDFLoader(tmp_path)
-    docs = loader.load()
-    
-    # Clean up temporary file
-    os.unlink(tmp_path)
-
-    # Split into chunks
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200
-    )
-    chunks = splitter.split_documents(docs)
-
-    # OpenAI Embeddings
-    openai_key = st.secrets.get("OPENAI_API_KEY")
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=openai_key)
-
-    # Build FAISS index
-    vectorstore = FAISS.from_documents(chunks, embeddings)
-
-    # Save index
-    vectorstore.save_local(index_path)
-    return vectorstore
-
-
-# ---------------- Retrieval + LLM ---------------- #
-@st.cache_resource(show_spinner=False)
-def load_retriever(index_path, llm_model="openai/gpt-oss-20b:free"):
-    """Load FAISS retriever + wrap with OpenRouter LLM"""
-    # Use OpenAI embeddings (same as used during indexing)
-    openai_key = st.secrets.get("OPENAI_API_KEY")
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=openai_key)
-
-    vectorstore = FAISS.load_local(index_path, embeddings, allow_dangerous_deserialization=True)
-    retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 5})
-
-    # OpenRouter LLM
-    openrouter_key = st.secrets.get("OPENROUTER_API_KEY")
-    llm = ChatOpenAI(
-        model=llm_model,
-        openai_api_key=openrouter_key,
-        openai_api_base="https://openrouter.ai/api/v1",
-        temperature=0.1,
-        max_tokens=1000,
-        default_headers={
-            "HTTP-Referer": "http://localhost:8501",
-            "X-Title": "LangChain PDF Chat"
-        }
-    )
-# Custom prompt template for better responses
-    custom_prompt = PromptTemplate(
-        input_variables=["context", "question", "chat_history"],
-        template="""You are a helpful AI assistant that answers questions based on the provided PDF document context. 
-    Your task is to provide accurate, helpful, and detailed answers using only the information from the document.
-
-    Guidelines:
-    - Use only the information provided in the context below
-    - If the answer is not in the context, clearly state "I cannot find this information in the provided document"
-    - Be specific and cite relevant details from the document
-    - If referencing specific sections, mention page numbers when available
-    - Provide comprehensive answers while staying focused on the question
-    - Maintain a professional and helpful tone
-
-    Previous conversation history:
-    {chat_history}
-
-    Context from the document:
-    {context}
-
-    Question: {question}
-
-    Answer: Based on the provided document, """
-    )
-
-    # Conversational chain with custom prompt
-    qa_chain = ConversationalRetrievalChain.from_llm(
-        llm=llm,
-        retriever=retriever,
-        return_source_documents=True,
-        combine_docs_chain_kwargs={"prompt": custom_prompt}
-    )
-    # # Conversational chain
-    # qa_chain = ConversationalRetrievalChain.from_llm(
-    #     llm=llm,
-    #     retriever=retriever,
-    #     return_source_documents=True
-    # )
-    return qa_chain
-
-
-# ---------------- Streamlit UI ---------------- #
 def main():
-    st.set_page_config(page_title="LangChain PDF Chat", layout="wide")
-    st.title("📄 Chat with your PDF (LangChain)")
+    st.set_page_config(page_title="PDF Chatbot", layout="wide")
+    st.title("📄 Chat with your PDF")
 
-    # API Key setup
+    # ---------------- API Keys ---------------- #
     st.sidebar.header("🔑 API Configuration")
-    
-    # Check for API keys (environment variables or Streamlit secrets)
     openai_key = st.secrets.get("OPENAI_API_KEY")
     openrouter_key = st.secrets.get("OPENROUTER_API_KEY")
-    
+
     if not openai_key:
         st.sidebar.warning("⚠️ OPENAI_API_KEY not found")
-        st.sidebar.info("💡 Configure in Streamlit Cloud secrets or .env file")
     else:
         st.sidebar.success("✅ OpenAI API key configured")
-        
+
     if not openrouter_key:
         st.sidebar.warning("⚠️ OPENROUTER_API_KEY not found")
-        st.sidebar.info("💡 Configure in Streamlit Cloud secrets or .env file")
     else:
         st.sidebar.success("✅ OpenRouter API key configured")
 
-    # Model selection
-    st.subheader("🔧 Model Configuration")
-    
+    # ---------------- Model & Chunk Settings ---------------- #
+    st.subheader("🔧 Model & Chunk Configuration")
+
     col1, col2 = st.columns(2)
-    
     with col1:
-        st.write("**Embedding Model** (for document search)")
-        st.info("🔥 **OpenAI text-embedding-3-small** - High quality embeddings")
-        st.caption("💡 Fast and accurate semantic search")
-    
+        st.write("**Embedding Model**")
+        st.info("🔥 OpenAI text-embedding-3-small")
     with col2:
-        st.write("**LLM Models** (for generating answers) - 🆓 Free!")
-        llm_model = st.selectbox(
-            "Select LLM (for answers)",
-            [
-                "openai/gpt-oss-20b:free"
-            ]
-        )
-        st.caption("💰 This model is completely free on OpenRouter!")
+        st.write("**LLM Model**")
+        llm_model = st.selectbox("Select LLM", ["openai/gpt-oss-20b:free"])
+
+    # Chunk sliders
+    st.subheader("⚙️ Chunk Settings")
+    chunk_size = st.slider("Chunk size (tokens-ish)", 100, 2000, 1000, 50)
+    chunk_overlap = st.slider("Chunk overlap (tokens-ish)", 0, 500, 200, 50)
 
     if "history" not in st.session_state:
         st.session_state.history = []
@@ -163,43 +50,36 @@ def main():
             os.makedirs(index_path)
 
         if st.button("Build Index"):
-            if not openai_key:
-                st.error("❌ Please set OPENAI_API_KEY in your environment variables")
-                return
             with st.spinner("Indexing..."):
-                ingest_pdf(pdf_file, index_path)
+                ingest_pdf(pdf_file, index_path, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
             st.success("✅ PDF indexed")
 
-        # ✅ Check if FAISS index exists before loading
         index_file = os.path.join(index_path, "index.faiss")
         if os.path.exists(index_file):
-            if not openrouter_key:
-                st.error("❌ Please set OPENROUTER_API_KEY in your environment variables to chat")
-                st.info("💡 Create a .env file with: `OPENROUTER_API_KEY=your_api_key_here`")
-                return
-
             qa_chain = load_retriever(index_path, llm_model)
-
             user_q = st.chat_input("Ask a question about the PDF...")
             if user_q:
                 st.session_state.history.append(("user", user_q))
                 result = qa_chain.invoke({"question": user_q, "chat_history": st.session_state.history})
-
-                # Store assistant response
                 st.session_state.history.append(("assistant", result["answer"]))
 
-                # Render history
-                for role, msg in st.session_state.history:
-                    with st.chat_message(role):
-                        st.write(msg)
+            # Display chat
+            st.sidebar.subheader("💬 Chat History")
+            for role, msg in st.session_state.history:
+                st.sidebar.write(f"**{role}**: {msg}")
 
-                # Citations
-                with st.expander("Citations"):
-                    for doc in result["source_documents"]:
-                        st.markdown(f"- **p.{doc.metadata['page']}** — {doc.page_content[:200]}...")
+            # Render chat in main area
+            for role, msg in st.session_state.history:
+                with st.chat_message(role):
+                    st.write(msg)
+
+            # Citations
+            with st.expander("Citations"):
+                for doc in result["source_documents"]:
+                    st.markdown(f"- **p.{doc.metadata['page']}** — {doc.page_content[:200]}...")
+
         else:
             st.warning("⚠️ Please click **Build Index** after uploading your PDF.")
-
 
 if __name__ == "__main__":
     main()
