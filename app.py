@@ -35,9 +35,9 @@ def main():
         llm_model = st.selectbox("Select LLM", ["openai/gpt-oss-20b:free"])
 
     # Chunk sliders
-    st.subheader("⚙️ Chunk Settings")
-    chunk_size = st.slider("Chunk size", 100, 2000, 1000, 50)
-    chunk_overlap = st.slider("Chunk overlap", 0, 500, 200, 50)
+    st.sidebar.subheader("⚙️ Chunk Settings")
+    chunk_size = st.sidebar.slider("Chunk size", 100, 2000, 1000, 50)
+    chunk_overlap = st.sidebar.slider("Chunk overlap", 0, 500, 200, 50)
 
     if "history" not in st.session_state:
         st.session_state.history = []
