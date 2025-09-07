@@ -1,5 +1,6 @@
 import os
 import tempfile
+import json
 import streamlit as st
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
@@ -13,32 +14,21 @@ from langchain.prompts import PromptTemplate
 @st.cache_resource(show_spinner=False)
 def ingest_pdf(pdf_file, index_path):
     """Load PDF → Chunk → Embed → Store in FAISS"""
-    # Save uploaded file temporarily
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
         tmp_file.write(pdf_file.getvalue())
         tmp_path = tmp_file.name
-    
+
     loader = PyPDFLoader(tmp_path)
     docs = loader.load()
-    
-    # Clean up temporary file
     os.unlink(tmp_path)
 
-    # Split into chunks
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200
-    )
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     chunks = splitter.split_documents(docs)
 
-    # OpenAI Embeddings
     openai_key = st.secrets.get("OPENAI_API_KEY")
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=openai_key)
 
-    # Build FAISS index
     vectorstore = FAISS.from_documents(chunks, embeddings)
-
-    # Save index
     vectorstore.save_local(index_path)
     return vectorstore
 
@@ -46,15 +36,12 @@ def ingest_pdf(pdf_file, index_path):
 # ---------------- Retrieval + LLM ---------------- #
 @st.cache_resource(show_spinner=False)
 def load_retriever(index_path, llm_model="openai/gpt-oss-20b:free"):
-    """Load FAISS retriever + wrap with OpenRouter LLM"""
-    # Use OpenAI embeddings (same as used during indexing)
     openai_key = st.secrets.get("OPENAI_API_KEY")
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=openai_key)
 
     vectorstore = FAISS.load_local(index_path, embeddings, allow_dangerous_deserialization=True)
     retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 5})
 
-    # OpenRouter LLM
     openrouter_key = st.secrets.get("OPENROUTER_API_KEY")
     llm = ChatOpenAI(
         model=llm_model,
@@ -67,18 +54,16 @@ def load_retriever(index_path, llm_model="openai/gpt-oss-20b:free"):
             "X-Title": "LangChain PDF Chat"
         }
     )
-# Custom prompt template for better responses
+
     custom_prompt = PromptTemplate(
         input_variables=["context", "question", "chat_history"],
-        template="""You are a helpful AI assistant that answers questions based on the provided PDF document context. 
-    Your task is to provide accurate, helpful, and detailed answers using only the information from the document.
+        template="""You are a helpful AI assistant that answers questions based on the provided PDF document context.
 
     Guidelines:
     - Use only the information provided in the context below
     - If the answer is not in the context, clearly state "I cannot find this information in the provided document"
     - Be specific and cite relevant details from the document
-    - If referencing specific sections, mention page numbers when available
-    - Provide comprehensive answers while staying focused on the question
+    - Mention page numbers when possible
     - Maintain a professional and helpful tone
 
     Previous conversation history:
@@ -89,22 +74,15 @@ def load_retriever(index_path, llm_model="openai/gpt-oss-20b:free"):
 
     Question: {question}
 
-    Answer: Based on the provided document, """
+    Answer:"""
     )
 
-    # Conversational chain with custom prompt
     qa_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
         retriever=retriever,
         return_source_documents=True,
         combine_docs_chain_kwargs={"prompt": custom_prompt}
     )
-    # # Conversational chain
-    # qa_chain = ConversationalRetrievalChain.from_llm(
-    #     llm=llm,
-    #     retriever=retriever,
-    #     return_source_documents=True
-    # )
     return qa_chain
 
 
@@ -113,92 +91,71 @@ def main():
     st.set_page_config(page_title="LangChain PDF Chat", layout="wide")
     st.title("📄 Chat with your PDF (LangChain)")
 
-    # API Key setup
-    st.sidebar.header("🔑 API Configuration")
-    
-    # Check for API keys (environment variables or Streamlit secrets)
-    openai_key = st.secrets.get("OPENAI_API_KEY")
-    openrouter_key = st.secrets.get("OPENROUTER_API_KEY")
-    
-    if not openai_key:
-        st.sidebar.warning("⚠️ OPENAI_API_KEY not found")
-        st.sidebar.info("💡 Configure in Streamlit Cloud secrets or .env file")
-    else:
-        st.sidebar.success("✅ OpenAI API key configured")
-        
-    if not openrouter_key:
-        st.sidebar.warning("⚠️ OPENROUTER_API_KEY not found")
-        st.sidebar.info("💡 Configure in Streamlit Cloud secrets or .env file")
-    else:
-        st.sidebar.success("✅ OpenRouter API key configured")
+    # Session state for chat persistence
+    if "chat_sessions" not in st.session_state:
+        st.session_state.chat_sessions = {}  # {session_name: [(role, msg), ...]}
+    if "active_session" not in st.session_state:
+        st.session_state.active_session = None
 
-    # Model selection
-    st.subheader("🔧 Model Configuration")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.write("**Embedding Model** (for document search)")
-        st.info("🔥 **OpenAI text-embedding-3-small** - High quality embeddings")
-        st.caption("💡 Fast and accurate semantic search")
-    
-    with col2:
-        st.write("**LLM Models** (for generating answers) - 🆓 Free!")
-        llm_model = st.selectbox(
-            "Select LLM (for answers)",
-            [
-                "openai/gpt-oss-20b:free"
-            ]
+    # Sidebar: Conversation Management
+    st.sidebar.header("💬 Conversations")
+    new_name = st.sidebar.text_input("New conversation name")
+    if st.sidebar.button("➕ Create") and new_name:
+        st.session_state.chat_sessions[new_name] = []
+        st.session_state.active_session = new_name
+
+    if st.session_state.chat_sessions:
+        chosen = st.sidebar.radio(
+            "Select conversation:",
+            list(st.session_state.chat_sessions.keys()),
+            index=list(st.session_state.chat_sessions.keys()).index(st.session_state.active_session)
+            if st.session_state.active_session else 0
         )
-        st.caption("💰 This model is completely free on OpenRouter!")
+        st.session_state.active_session = chosen
 
-    if "history" not in st.session_state:
-        st.session_state.history = []
+        # Export chat option
+        if st.sidebar.button("⬇️ Download JSON"):
+            data = st.session_state.chat_sessions[st.session_state.active_session]
+            st.sidebar.download_button(
+                "Save Chat",
+                json.dumps(data, indent=2),
+                file_name=f"{st.session_state.active_session}.json"
+            )
 
+    # File upload & indexing
     pdf_file = st.file_uploader("Upload PDF", type=["pdf"])
     if pdf_file:
-        current_dir = os.getcwd()
-        index_path = os.path.join(current_dir, "storage", "faiss_openai_embeddings")
-        if not os.path.exists(index_path):
-            os.makedirs(index_path)
+        index_path = os.path.join(os.getcwd(), "storage", "faiss_openai_embeddings")
+        os.makedirs(index_path, exist_ok=True)
 
-        if st.button("Build Index"):
-            if not openai_key:
-                st.error("❌ Please set OPENAI_API_KEY in your environment variables")
-                return
-            with st.spinner("Indexing..."):
+        if st.button("⚡ Build Index"):
+            with st.spinner("Indexing PDF..."):
                 ingest_pdf(pdf_file, index_path)
-            st.success("✅ PDF indexed")
+            st.success("✅ Index built")
 
-        # ✅ Check if FAISS index exists before loading
         index_file = os.path.join(index_path, "index.faiss")
-        if os.path.exists(index_file):
-            if not openrouter_key:
-                st.error("❌ Please set OPENROUTER_API_KEY in your environment variables to chat")
-                st.info("💡 Create a .env file with: `OPENROUTER_API_KEY=your_api_key_here`")
-                return
-
-            qa_chain = load_retriever(index_path, llm_model)
+        if os.path.exists(index_file) and st.session_state.active_session:
+            qa_chain = load_retriever(index_path)
 
             user_q = st.chat_input("Ask a question about the PDF...")
             if user_q:
-                st.session_state.history.append(("user", user_q))
-                result = qa_chain.invoke({"question": user_q, "chat_history": st.session_state.history})
+                st.session_state.chat_sessions[st.session_state.active_session].append(("user", user_q))
+                result = qa_chain.invoke({
+                    "question": user_q,
+                    "chat_history": st.session_state.chat_sessions[st.session_state.active_session]
+                })
+                st.session_state.chat_sessions[st.session_state.active_session].append(("assistant", result["answer"]))
 
-                # Store assistant response
-                st.session_state.history.append(("assistant", result["answer"]))
+            # Render chat history
+            for role, msg in st.session_state.chat_sessions[st.session_state.active_session]:
+                with st.chat_message(role):
+                    st.write(msg)
 
-                # Render history
-                for role, msg in st.session_state.history:
-                    with st.chat_message(role):
-                        st.write(msg)
-
-                # Citations
-                with st.expander("Citations"):
+            # Show citations
+            if user_q and result.get("source_documents"):
+                with st.expander("📚 Citations"):
                     for doc in result["source_documents"]:
-                        st.markdown(f"- **p.{doc.metadata['page']}** — {doc.page_content[:200]}...")
-        else:
-            st.warning("⚠️ Please click **Build Index** after uploading your PDF.")
+                        st.markdown(f"- **p.{doc.metadata.get('page', '?')}** — {doc.page_content[:200]}...")
 
 
 if __name__ == "__main__":
