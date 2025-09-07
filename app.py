@@ -121,7 +121,11 @@ def main():
 
     pdf_file = st.file_uploader("Upload PDF", type=["pdf"])
     if pdf_file:
-        index_path = "faiss_openai_embeddings"
+        current_dir = os.getcwd()
+        index_path = os.path.join(current_dir, "storage", "faiss_openai_embeddings")
+        if not os.path.exists(index_path):
+            os.makedirs(index_path)
+
         
         if st.button("Build Index"):
             if not openai_key:
