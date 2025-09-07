@@ -35,7 +35,7 @@ def main():
         llm_model = st.selectbox("Select LLM", ["openai/gpt-oss-20b:free"])
 
     # Chunk sliders
-    st.sidebar("⚙️ Chunk Settings")
+    st.subheader("⚙️ Chunk Settings")
     chunk_size = st.slider("Chunk size", 100, 2000, 1000, 50)
     chunk_overlap = st.slider("Chunk overlap", 0, 500, 200, 50)
 
