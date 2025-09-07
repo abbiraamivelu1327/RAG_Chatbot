@@ -6,6 +6,7 @@ from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain.chains import ConversationalRetrievalChain
+from langchain.prompts import PromptTemplate
 
 
 # ---------------- PDF ingestion ---------------- #
@@ -66,13 +67,44 @@ def load_retriever(index_path, llm_model="openai/gpt-oss-20b:free"):
             "X-Title": "LangChain PDF Chat"
         }
     )
+# Custom prompt template for better responses
+    custom_prompt = PromptTemplate(
+        input_variables=["context", "question", "chat_history"],
+        template="""You are a helpful AI assistant that answers questions based on the provided PDF document context. 
+    Your task is to provide accurate, helpful, and detailed answers using only the information from the document.
 
-    # Conversational chain
+    Guidelines:
+    - Use only the information provided in the context below
+    - If the answer is not in the context, clearly state "I cannot find this information in the provided document"
+    - Be specific and cite relevant details from the document
+    - If referencing specific sections, mention page numbers when available
+    - Provide comprehensive answers while staying focused on the question
+    - Maintain a professional and helpful tone
+
+    Previous conversation history:
+    {chat_history}
+
+    Context from the document:
+    {context}
+
+    Question: {question}
+
+    Answer: Based on the provided document, """
+    )
+
+    # Conversational chain with custom prompt
     qa_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
         retriever=retriever,
-        return_source_documents=True
+        return_source_documents=True,
+        combine_docs_chain_kwargs={"prompt": custom_prompt}
     )
+    # # Conversational chain
+    # qa_chain = ConversationalRetrievalChain.from_llm(
+    #     llm=llm,
+    #     retriever=retriever,
+    #     return_source_documents=True
+    # )
     return qa_chain
 
 
