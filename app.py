@@ -29,13 +29,13 @@ def main():
     col1, col2 = st.columns(2)
     with col1:
         st.write("**Embedding Model**")
-        st.info("🔥 OpenAI text-embedding-3-small")
+        st.info("OpenAI text-embedding-3-small")
     with col2:
         st.write("**LLM Model**")
         llm_model = st.selectbox("Select LLM", ["openai/gpt-oss-20b:free"])
 
     # Chunk sliders
-    st.sidebar.subheader("⚙️ Chunk Settings")
+    st.sidebar.subheader("Chunk Settings")
     chunk_size = st.sidebar.slider("Chunk size", 100, 2000, 1000, 50)
     chunk_overlap = st.sidebar.slider("Chunk overlap", 0, 500, 200, 50)
 
