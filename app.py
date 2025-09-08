@@ -50,6 +50,7 @@ def main():
             os.makedirs(index_path)
 
         if st.button("Build Index"):
+            st.cache_resource.clear()
             with st.spinner("Indexing..."):
                 ingest_pdf(
                     pdf_file,

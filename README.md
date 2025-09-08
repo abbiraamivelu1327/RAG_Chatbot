@@ -25,11 +25,13 @@ pip install -r requirements.txt
 2. Configure Environment Variables
 Create a .streamlit/secrets.toml file (do not commit real keys):
 
-OPENAI_API_KEY = "your-openai-api-key"
-OPENROUTER_API_KEY = "your-openrouter-api-key"
+    - OPENAI_API_KEY = "your-openai-api-key"
+    - OPENROUTER_API_KEY = "your-openrouter-api-key"
 
 3. Run the App
 streamlit run app.py
+
+---
 
 ### Chunking Strategy
 
@@ -39,6 +41,8 @@ streamlit run app.py
 - Purpose: Prevents loss of context across chunk boundaries.
 - Users can control chunk size and overlap through sidebar sliders for fine-tuning.
 
+---
+
 ### Vector Database & Retrieval
 
 - Vector DB: FAISS (Facebook AI Similarity Search)
@@ -46,6 +50,8 @@ streamlit run app.py
 - Balances relevance & diversity.
 - Avoids redundant chunks by retrieving complementary sections.
 - Search Params: k=5 (top 5 chunks returned).
+
+---
 
 ### Conversation Memory
 
